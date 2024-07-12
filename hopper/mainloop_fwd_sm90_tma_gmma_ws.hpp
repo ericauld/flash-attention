@@ -162,6 +162,24 @@ struct CollectiveMainloopFwd {
         return n_block_max;
     }
 
+    /* EA: The way this is used in fwd kernel is
+
+    for (auto work_tile_info = scheduler.get_initial_work(); 
+         work_tile_info.is_valid(scheduler_params); 
+         work_tile_info = scheduler.get_next_work(scheduler_params, work_tile_info)) {
+
+        int tile_count_semaphore = 0;
+
+        collective_mainloop.load(params, mainloop_params, scheduler_params, pipeline_k, pipeline_v, smem_pipe_write_k, smem_pipe_write_v,
+                                 shared_storage, work_tile_info, work_idx, tile_count_semaphore);
+        // ++work_idx;
+        // work_tile_info = scheduler.fetch_next_work();
+    }
+
+    collective_mainloop.load_tail(pipeline_k, pipeline_v, smem_pipe_write_k, smem_pipe_write_v);
+
+     */
+
     template <typename FullParams, typename SchedulerParams, typename SharedStorage, typename WorkTileInfo>
     CUTLASS_DEVICE void
     load(FullParams const& params,
@@ -218,6 +236,8 @@ struct CollectiveMainloopFwd {
         Tensor gK = local_tile(mK(_, _, bidh, bidb), select<1, 2>(TileShape_MNK{}), make_coord(_, _0{}));  // (N, K, _)
         Tensor gV = local_tile(mV(_, _, bidh, bidb), select<1, 2>(TileShape_MNK{}), make_coord(_, _0{}));  // (N, K, _)
 
+        // EA: What's this `_x` stuff?
+
         Tensor sQ_x = make_tensor(sQ.data(), make_layout(sQ.layout(), Layout<_1>{}));
         Tensor gQ_x = make_tensor(gQ.data(), make_layout(gQ.layout(), Layout<_1>{}));
         auto [tQgQ, tQsQ] = tma_partition(mainloop_params.tma_load_Q, _0{}, Layout<_1>{},
@@ -233,6 +253,7 @@ struct CollectiveMainloopFwd {
             for (int m = 0; m < size<0>(block_layout); ++m) {
                 mcast_mask_kv |= (uint16_t(1) << block_layout(m, cluster_local_block_id.y, _0{}));
             }
+            // EA: Interesing, bitwise or here...
         }
 
         int n_block = n_block_max - 1;

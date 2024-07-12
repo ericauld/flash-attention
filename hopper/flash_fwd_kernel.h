@@ -106,9 +106,10 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
     
     if (warp_group_idx == 0) {  // Producer
         
-        // EA: the first thing the producer does is deallocate & 
-        // the first thing the consumer does is allocate...these functions 
-        // are in include/cutlass/arch/reg_reconfig.h
+        // EA: the first thing the producer does is deallocate & the first thing
+        // the consumer does is allocate...these functions are in
+        // include/cutlass/arch/reg_reconfig.h and they're really short wrappers
+        // around PTX (setmaxnreg.inc and setmaxnreg.dec)
         
         cutlass::arch::warpgroup_reg_dealloc<Ktraits::kNWarps == 12 ? 24 : 32>();
         // cutlass::arch::warpgroup_reg_dealloc<56>();
@@ -134,7 +135,10 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
             // while (work_tile_info.is_valid()) {
             // for (int tile_count = blockIdx.x; tile_count < params.total_blocks; tile_count = get_tile_count()) {
             // for (int tile_count_semaphore = blockIdx.x; tile_count_semaphore < params.total_blocks; tile_count_semaphore = __shfl_sync(0xffffffff, tile_count_semaphore, 0)) {
-            for (auto work_tile_info = scheduler.get_initial_work(); work_tile_info.is_valid(scheduler_params); work_tile_info = scheduler.get_next_work(scheduler_params, work_tile_info)) {
+            for (auto work_tile_info = scheduler.get_initial_work();
+                 work_tile_info.is_valid(scheduler_params); 
+                 work_tile_info = scheduler.get_next_work(scheduler_params, work_tile_info))
+            {
                 int tile_count_semaphore = 0;
                 collective_mainloop.load(params, mainloop_params, scheduler_params, pipeline_k, pipeline_v, smem_pipe_write_k, smem_pipe_write_v,
                                          shared_storage, work_tile_info, work_idx, tile_count_semaphore);
