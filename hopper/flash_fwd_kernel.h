@@ -73,7 +73,7 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
        - Ktraits has a trait called MainloopPipeline
        - In flash/hopper/kernel_traits.h, we have 
              MainloopPipeline := cutlass::PipelineTmaAsync<kStages>
-       - In flash/.../mainloop, 
+       - Above in this file, 
              PipelineParams := MainloopPipeline::Params
        - PipelineTmaAsync<int Stages_> lives in 
             cutlass/include/cutlass/pipeline/sm90_pipeline.hpp
@@ -86,6 +86,44 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
         uint32_t is_leader = 0;
         uint32_t num_consumers = 0;
       };
+
+      As for PipelineState, 
+      - Above in this file,
+             PipelineState := MainloopPipeline::PipelineState
+      - In flash/hopper/kernel_traits.h, we have 
+             MainloopPipeline := cutlass::PipelineTmaAsync<kStages>
+      - PipelineTmaAsync<int Stages_> lives in 
+            cutlass/include/cutlass/pipeline/sm90_pipeline.hpp
+      - It's about 300 lines long
+      - In PipelineTmaAsync<int Stages_>,
+             PipelineState := cutlass::PipelineState<Stages>
+      - That struct is free in the same file
+      - It's 80 lines long...has state
+        - Stages : int
+        - index_ : int
+        - count  : int
+        - phase_ : int
+      - Main fcn is operator++
+      - Here's the `advance` method
+
+     CUTLASS_DEVICE
+     PipelineState& advance(uint32_t num_iterations) {
+       if constexpr (Stages > 0) {
+         // Number of iterations cross over the stage boundary => flipped phase
+         if ((num_iterations < Stages) && (index_ + num_iterations) >= Stages ) {
+           phase_ ^= 1;
+         }
+         // How many times number of iterations cross over the stage boundary and
+         // end up on a odd number => flipped phase
+         if ((num_iterations >= Stages) && (((index_ + num_iterations) / Stages) % 2) == 1) {
+           phase_ ^= 1;
+         }
+         index_ = (index_ + num_iterations) % Stages;
+         count_ += num_iterations;
+       }
+       return *this;
+     }
+
     */
 
     PipelineParams pipeline_params;
@@ -146,10 +184,17 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
 
             // EA: Only warp 0 issues the load
             
-            // EA: make_producer_start_state is discussed in
-            // media/docs/pipeline.md. Evidently what it does is acquire
-            // the initial "stages" for the producers, assuming the pipe starts
-            // "empty" (meaning all producer acquires initially succeed)
+            /* EA: make_producer_start_state is discussed in
+               media/docs/pipeline.md. Evidently what it does is acquire
+               the initial "stages" for the producers, assuming the pipe starts
+               "empty" (meaning all producer acquires initially succeed)
+               
+               It has this signature:
+
+               template <class Pipeline>
+               PipelineState <Pipeline::Stages>
+               make_producer_start_state (void)
+            */
             
             PipelineState smem_pipe_write_k = cutlass::make_producer_start_state<MainloopPipeline>();
             PipelineState smem_pipe_write_v = cutlass::make_producer_start_state<MainloopPipeline>();
@@ -169,8 +214,12 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
                  work_tile_info = scheduler.get_next_work(scheduler_params, work_tile_info))
             {
                 int tile_count_semaphore = 0;
+                // EA: Why have this if you're just going to set it to zero each time?
+                // Also, you're redclaring it over and over?
+                                        /* c&        c&                c&                v           v        PipelineState &    PipelineState &        */
                 collective_mainloop.load(params, mainloop_params, scheduler_params, pipeline_k, pipeline_v, smem_pipe_write_k, smem_pipe_write_v,
                                          shared_storage, work_tile_info, work_idx, tile_count_semaphore);
+                                        /*   &               v (!)           &             &                  */
                 // ++work_idx;
                 // work_tile_info = scheduler.fetch_next_work();
             }
@@ -221,9 +270,12 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
                 collective_epilogue.store_zero(epilogue_params, threadIdx.x - NumCopyThreads, block_coord);
                 continue;
             }
-
+            /*                         c&                v            v       PipelineState &   PipelineState &   */
             collective_mainloop.mma(mainloop_params, pipeline_k, pipeline_v, smem_pipe_read_k, smem_pipe_read_v,
-                                    tOrO, softmax, n_block_max, threadIdx.x - NumCopyThreads, work_idx, m_block, shared_storage);
+                                    tOrO,             softmax,    n_block_max, 
+                                 /* FrgTensorO &      Softmax &     */
+                                    threadIdx.x - NumCopyThreads, work_idx, m_block, shared_storage);
+
                                     // tOrO, softmax, n_block_max, threadIdx.x - NumCopyThreads + (work_idx >> 30), work_idx, shared_storage);
                                     // tOrO, softmax, n_block_max, threadIdx.x - NumCopyThreads, 0, shared_storage);
             collective_epilogue.store(epilogue_params, tOrO, softmax.row_sum, shared_storage, tiled_mma1,
