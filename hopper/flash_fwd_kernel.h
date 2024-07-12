@@ -230,6 +230,7 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
         // cutlass::arch::warpgroup_reg_alloc<Ktraits::kNWarps == 12 ? 224 : 160>();
 
         // Initialize matmul objects.
+        /* EA: "Objects"? Why plural? I see one */
         typename Ktraits::TiledMma1 tiled_mma1;
 
         TileScheduler scheduler{};
@@ -238,6 +239,7 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
         // We don't need separate variables smem_pip_release_k and smem_pipe_release_v
         // (like in Cutlass's gemm) because the read and release pipeline states are always the same.
 
+        // EA: Hmmm...evidently this lambda is used only in commented out code
         auto get_tile_count = [&] () {
             // cutlass::arch::NamedBarrier::sync(NumMmaThreads + 2 * cutlass::NumThreadsPerWarp, 10 /*id*/);
             cutlass::arch::NamedBarrier::sync(NumMmaThreads + cutlass::NumThreadsPerWarp, 10 /*id*/);
@@ -250,7 +252,9 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
         CUTLASS_PRAGMA_NO_UNROLL
         // for (int work_idx = 0; work_idx * gridDim.x + blockIdx.x < params.total_blocks; ++work_idx) {
         // for (int tile_count_semaphore = blockIdx.x, work_idx = 0; tile_count_semaphore < params.total_blocks; tile_count_semaphore = get_tile_count()) {
-        for (auto work_tile_info = scheduler.get_initial_work(); work_tile_info.is_valid(scheduler_params); work_tile_info = scheduler.get_next_work(scheduler_params, work_tile_info)) {
+        for (auto work_tile_info = scheduler.get_initial_work(); 
+             work_tile_info.is_valid(scheduler_params); 
+             work_tile_info = scheduler.get_next_work(scheduler_params, work_tile_info)) {
             // Attention output (GEMM-II) accumulator.
             Tensor tOrO = partition_fragment_C(tiled_mma1, select<0, 2>(TileShape_MNK{}));
             flash::Softmax<2 * (2 * kBlockM / NumMmaThreads)> softmax;

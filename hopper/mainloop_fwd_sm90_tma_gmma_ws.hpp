@@ -199,6 +199,9 @@ struct CollectiveMainloopFwd {
         // here and in `mma`.. in particular you need to learn the API of
         // cutlass::arch::NamedBarrier
 
+        /* EA: The thing I want to better understand about this is how the
+           consumers get notified that the load is done... */
+
         static constexpr int kBlockM = get<0>(TileShape_MNK{});
         static constexpr int kBlockN = get<1>(TileShape_MNK{});
 
@@ -265,6 +268,8 @@ struct CollectiveMainloopFwd {
 
         int n_block = n_block_max - 1;
 
+        /* EA: Why is it that below, before we copy v's, we need to both wait
+        /and/ producer_acquire, but here we only need to producer_acquire?  */
         int lane_predicate = cute::elect_one_sync();
         if (lane_predicate) {
             pipeline_k.producer_acquire(smem_pipe_write_k);
@@ -297,6 +302,8 @@ struct CollectiveMainloopFwd {
                 pipeline_v.producer_acquire(smem_pipe_write_v);
                 copy(mainloop_params.tma_load_V.with(*pipeline_v.producer_get_barrier(smem_pipe_write_v), mcast_mask_kv),
                     tVgV(_, n_block), tVsV(_, smem_pipe_write_v.index()));
+
+                /* EA: OK, here are actual copies */
                 ++smem_pipe_write_v;
             }
         }
