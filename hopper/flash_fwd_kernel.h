@@ -69,6 +69,25 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
     // Obtain warp index
     int const warp_group_thread_idx = threadIdx.x % cutlass::NumThreadsPerWarpGroup;
 
+    /* EA: The way PipelineParams breaks down is:
+       - Ktraits has a trait called MainloopPipeline
+       - In flash/hopper/kernel_traits.h, we have 
+             MainloopPipeline := cutlass::PipelineTmaAsync<kStages>
+       - In flash/.../mainloop, 
+             PipelineParams := MainloopPipeline::Params
+       - PipelineTmaAsync<int Stages_> lives in 
+            cutlass/include/cutlass/pipeline/sm90_pipeline.hpp
+       - It's about 300 lines long
+       - Its Params struct is
+
+      struct Params {
+        uint32_t transaction_bytes = 0;
+        ThreadCategory role = ThreadCategory::NonParticipant;
+        uint32_t is_leader = 0;
+        uint32_t num_consumers = 0;
+      };
+    */
+
     PipelineParams pipeline_params;
     pipeline_params.transaction_bytes = CollectiveMainloop::TmaTransactionBytesK;
     int warp_group_idx = cutlass::canonical_warp_group_idx();
@@ -83,7 +102,14 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
         shared_storage.barrier_O.init(size(ClusterShape{}) /*numThreads*/);
     }
     
-    // EA: Interesting
+    /* EA: So I guess the first thing to understand is that K and V have
+       separate piplelines. And it seems all the work goes on in the functions:
+       - collective_mainloop.load
+       - collective_mainloop.load_tail
+       - collective_mainloop.mma
+       And collective_epilogue methods do stuff, too, but those don't look at
+       these pipelines.
+    */ 
 
     // We're counting on pipeline_k to call cutlass::arch::fence_barrier_init();
     MainloopPipeline pipeline_k(shared_storage.pipeline_k, pipeline_params, ClusterShape{});
@@ -102,8 +128,6 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
 
     static_assert(Ktraits::kNWarps == 12 || Ktraits::kNWarps == 16);
     
-    // EA: OK, Here's where the two split
-    
     if (warp_group_idx == 0) {  // Producer
         
         // EA: the first thing the producer does is deallocate & the first thing
@@ -119,8 +143,13 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
 
         int warp_idx_in_warpgroup = __shfl_sync(0xffffffff, (threadIdx.x / 32) % 4, 0);
         if (warp_idx_in_warpgroup == 0) {  // Load Q, K, V
+
+            // EA: Only warp 0 issues the load
             
-            // EA: cutlass make_producer_start_state, interesting
+            // EA: make_producer_start_state is discussed in
+            // media/docs/pipeline.md. Evidently what it does is to do acquire
+            // the initial "stages" for the producers, assuming the pipe starts
+            // "empty" (meaning all producer acquires initially succeed)
             
             PipelineState smem_pipe_write_k = cutlass::make_producer_start_state<MainloopPipeline>();
             PipelineState smem_pipe_write_v = cutlass::make_producer_start_state<MainloopPipeline>();
