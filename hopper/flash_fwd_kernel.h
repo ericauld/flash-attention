@@ -105,6 +105,10 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
     // EA: OK, Here's where the two split
     
     if (warp_group_idx == 0) {  // Producer
+        
+        // EA: the first thing the producer does is deallocate & 
+        // thevfirst thing the consumer does is allocate
+        
         cutlass::arch::warpgroup_reg_dealloc<Ktraits::kNWarps == 12 ? 24 : 32>();
         // cutlass::arch::warpgroup_reg_dealloc<56>();
         // StaticPersistentTileScheduler scheduler{params.m_block_divmod, params.head_divmod, params.total_blocks};
