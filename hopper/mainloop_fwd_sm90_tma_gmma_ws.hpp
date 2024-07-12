@@ -196,7 +196,8 @@ struct CollectiveMainloopFwd {
          ) {
 
         // EA: This wants close study of the synchronization primitives used
-        // here and in `mma`
+        // here and in `mma`.. in particular you need to learn the API of
+        // cutlass::arch::NamedBarrier
 
         static constexpr int kBlockM = get<0>(TileShape_MNK{});
         static constexpr int kBlockN = get<1>(TileShape_MNK{});
