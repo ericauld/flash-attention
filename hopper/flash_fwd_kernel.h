@@ -82,6 +82,9 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
         shared_storage.barrier_Q.init(1 /*numThreads*/);
         shared_storage.barrier_O.init(size(ClusterShape{}) /*numThreads*/);
     }
+    
+    // EA: Interesting
+
     // We're counting on pipeline_k to call cutlass::arch::fence_barrier_init();
     MainloopPipeline pipeline_k(shared_storage.pipeline_k, pipeline_params, ClusterShape{});
     MainloopPipeline pipeline_v(shared_storage.pipeline_v, pipeline_params, ClusterShape{});
@@ -98,6 +101,9 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
     }
 
     static_assert(Ktraits::kNWarps == 12 || Ktraits::kNWarps == 16);
+    
+    // EA: OK, Here's where the two split
+    
     if (warp_group_idx == 0) {  // Producer
         cutlass::arch::warpgroup_reg_dealloc<Ktraits::kNWarps == 12 ? 24 : 32>();
         // cutlass::arch::warpgroup_reg_dealloc<56>();
