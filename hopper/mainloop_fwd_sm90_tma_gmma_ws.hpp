@@ -215,6 +215,9 @@ struct CollectiveMainloopFwd {
         if (Is_causal && n_block_max <= 0) {
             // Need sync to avoid the case where the producer issues 2 arrives before the consumer can issue 1 wait
             cutlass::arch::NamedBarrier::sync(NumMmaThreads + cutlass::NumThreadsPerWarp, 7 /*id*/);
+
+            // EA: Check out the semantics of the 7 and the 10 ids
+
             // if (threadIdx.x % cutlass::NumThreadsPerWarp == 0) {
             //     tile_count_semaphore = atomicAdd(params.tile_count_semaphore, 1);
             //     shared_storage.tile_count_semaphore = tile_count_semaphore;
