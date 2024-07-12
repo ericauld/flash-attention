@@ -200,7 +200,8 @@ struct CollectiveMainloopFwd {
         // cutlass::arch::NamedBarrier
 
         /* EA: The thing I want to better understand about this is how the
-           consumers get notified that the load is done... */
+           consumers get notified that the load is done...
+           So before the consumer  */
 
         static constexpr int kBlockM = get<0>(TileShape_MNK{});
         static constexpr int kBlockN = get<1>(TileShape_MNK{});
