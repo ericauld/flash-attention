@@ -147,7 +147,7 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
             // EA: Only warp 0 issues the load
             
             // EA: make_producer_start_state is discussed in
-            // media/docs/pipeline.md. Evidently what it does is to do acquire
+            // media/docs/pipeline.md. Evidently what it does is acquire
             // the initial "stages" for the producers, assuming the pipe starts
             // "empty" (meaning all producer acquires initially succeed)
             
