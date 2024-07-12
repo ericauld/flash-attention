@@ -56,6 +56,7 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
 
     extern __shared__ char shared_memory[];
     auto &shared_storage = *reinterpret_cast<typename Ktraits::SharedStorage*>(shared_memory);
+    // EA: Hmmmm...weird
 
     int const lane_predicate = cute::elect_one_sync();
     int const warp_idx = cutlass::canonical_warp_idx_sync();
@@ -139,15 +140,7 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
         shared_storage.barrier_Q.init(1 /*numThreads*/);
         shared_storage.barrier_O.init(size(ClusterShape{}) /*numThreads*/);
     }
-    
-    /* EA: So I guess the first thing to understand is that K and V have
-       separate piplelines. And it seems all the work goes on in the functions:
-       - collective_mainloop.load
-       - collective_mainloop.load_tail
-       - collective_mainloop.mma
-       And collective_epilogue methods do stuff, too, but those don't look at
-       these pipelines.
-    */ 
+    /* EA: shared_storage.barrier_Q and barrier_O */
 
     // We're counting on pipeline_k to call cutlass::arch::fence_barrier_init();
     MainloopPipeline pipeline_k(shared_storage.pipeline_k, pipeline_params, ClusterShape{});
@@ -166,13 +159,7 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
 
     static_assert(Ktraits::kNWarps == 12 || Ktraits::kNWarps == 16);
     
-    if (warp_group_idx == 0) {  // Producer
-        
-        // EA: the first thing the producer does is deallocate & the first thing
-        // the consumer does is allocate...these functions are in
-        // include/cutlass/arch/reg_reconfig.h and they're really short wrappers
-        // around PTX (setmaxnreg.inc and setmaxnreg.dec)
-        
+    if (warp_group_idx == 0) {  // Producer        
         cutlass::arch::warpgroup_reg_dealloc<Ktraits::kNWarps == 12 ? 24 : 32>();
         // cutlass::arch::warpgroup_reg_dealloc<56>();
         // StaticPersistentTileScheduler scheduler{params.m_block_divmod, params.head_divmod, params.total_blocks};
@@ -209,6 +196,9 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
             // while (work_tile_info.is_valid()) {
             // for (int tile_count = blockIdx.x; tile_count < params.total_blocks; tile_count = get_tile_count()) {
             // for (int tile_count_semaphore = blockIdx.x; tile_count_semaphore < params.total_blocks; tile_count_semaphore = __shfl_sync(0xffffffff, tile_count_semaphore, 0)) {
+
+            /* EA: So I guess this little bit below issues all the loads...
+             */ 
             for (auto work_tile_info = scheduler.get_initial_work();
                  work_tile_info.is_valid(scheduler_params); 
                  work_tile_info = scheduler.get_next_work(scheduler_params, work_tile_info))
