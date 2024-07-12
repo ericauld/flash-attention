@@ -107,7 +107,8 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
     if (warp_group_idx == 0) {  // Producer
         
         // EA: the first thing the producer does is deallocate & 
-        // thevfirst thing the consumer does is allocate
+        // the first thing the consumer does is allocate...these functions 
+        // are in include/cutlass/arch/reg_reconfig.h
         
         cutlass::arch::warpgroup_reg_dealloc<Ktraits::kNWarps == 12 ? 24 : 32>();
         // cutlass::arch::warpgroup_reg_dealloc<56>();
