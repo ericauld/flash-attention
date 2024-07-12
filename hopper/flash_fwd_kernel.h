@@ -273,8 +273,9 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
             /*                         c&                v            v       PipelineState &   PipelineState &   */
             collective_mainloop.mma(mainloop_params, pipeline_k, pipeline_v, smem_pipe_read_k, smem_pipe_read_v,
                                     tOrO,             softmax,    n_block_max, 
-                                 /* FrgTensorO &      Softmax &     */
+                                 /* FrgTensorO &      Softmax &     int      */
                                     threadIdx.x - NumCopyThreads, work_idx, m_block, shared_storage);
+                                    /* int                           int      int         SharedStorage& */
 
                                     // tOrO, softmax, n_block_max, threadIdx.x - NumCopyThreads + (work_idx >> 30), work_idx, shared_storage);
                                     // tOrO, softmax, n_block_max, threadIdx.x - NumCopyThreads, 0, shared_storage);
