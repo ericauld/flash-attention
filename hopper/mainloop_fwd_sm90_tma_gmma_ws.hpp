@@ -65,6 +65,7 @@ struct CollectiveMainloopFwd {
 
     using ShapeQKV = cute::Shape<int32_t, int32_t, int32_t, int32_t>;  // (seqlen, d, head, batch)
     using StrideQKV = cute::Stride<int64_t, _1, int64_t, int64_t>;
+    // EA: I'm a little surprised by this...I'd expect (b, h, s, d) not (s, d, h, b)
 
     using TMA_Q = decltype(make_tma_copy(
         GmemTiledCopyQ{},
@@ -170,7 +171,8 @@ struct CollectiveMainloopFwd {
 
         int tile_count_semaphore = 0;
 
-        collective_mainloop.load(params, mainloop_params, scheduler_params, pipeline_k, pipeline_v, smem_pipe_write_k, smem_pipe_write_v,
+        collective_mainloop.load(params, mainloop_params, scheduler_params, pipeline_k, pipeline_v, 
+                                 smem_pipe_write_k, smem_pipe_write_v,
                                  shared_storage, work_tile_info, work_idx, tile_count_semaphore);
         // ++work_idx;
         // work_tile_info = scheduler.fetch_next_work();
@@ -195,38 +197,21 @@ struct CollectiveMainloopFwd {
          int& tile_count_semaphore
          ) {
 
-        // EA: This wants close study of the synchronization primitives used
-        // here and in `mma`.. in particular you need to learn the API of
-        // cutlass::arch::NamedBarrier
-
-        /* EA: The thing I want to better understand about this is how the
-           consumers get notified that the load is done...
-           So before the consumer  */
+        /* EA: The first thing I want to better understand about this is how the
+           consumers get notified that the load is done. That should be a call to 
+           `arrive`  */
 
         static constexpr int kBlockM = get<0>(TileShape_MNK{});
         static constexpr int kBlockN = get<1>(TileShape_MNK{});
-
-        // int const m_block = work_tile_info.M_idx;
-        // int const bidh = work_tile_info.H_idx;
-        // int const bidb = work_tile_info.B_idx;
-        // int m_block;
-        // int bidh, bidb;
-        // bidb = params.head_divmod.divmod(bidh, params.m_block_divmod.divmod(m_block, tile_count_semaphore));
         auto [m_block, bidh, bidb] = work_tile_info.get_block_coord(scheduler_params);
-        // if (threadIdx.x == 0) { printf("producer, blockIdx.x = %d, bidb = %d, bidh = %d, m_block = %d\n", blockIdx.x, bidb, bidh, m_block); }
 
         int n_block_max = get_n_block_max(mainloop_params, m_block);
         if (Is_causal && n_block_max <= 0) {
-            // Need sync to avoid the case where the producer issues 2 arrives before the consumer can issue 1 wait
+            // EA: Don't know why this sync/arrive is conditional
+
+            // Need sync to avoid the case where the producer issues 2 arrives
+            // before the consumer can issue 1 wait
             cutlass::arch::NamedBarrier::sync(NumMmaThreads + cutlass::NumThreadsPerWarp, 7 /*id*/);
-
-            // EA: Check out the semantics of the 7 and the 10 ids
-
-            // if (threadIdx.x % cutlass::NumThreadsPerWarp == 0) {
-            //     tile_count_semaphore = atomicAdd(params.tile_count_semaphore, 1);
-            //     shared_storage.tile_count_semaphore = tile_count_semaphore;
-            // }
-            // cutlass::arch::NamedBarrier::arrive(NumMmaThreads + 2 * cutlass::NumThreadsPerWarp, 10 /*id*/);
             cutlass::arch::NamedBarrier::arrive(NumMmaThreads + cutlass::NumThreadsPerWarp, 10 /*id*/);
             return;
         }
@@ -235,6 +220,7 @@ struct CollectiveMainloopFwd {
         Tensor sK = make_tensor(make_smem_ptr(shared_storage.smem_k.data()), SmemLayoutK{});
         Tensor sV = make_tensor(make_smem_ptr(shared_storage.smem_v.data()), SmemLayoutV{});
 
+        // EA: Interesting, so these tma_load_* are methods on the mainloop_params
         Tensor mQ = mainloop_params.tma_load_Q.get_tma_tensor(mainloop_params.shape_Q);
         Tensor mK = mainloop_params.tma_load_K.get_tma_tensor(mainloop_params.shape_K);
         Tensor mV = mainloop_params.tma_load_V.get_tma_tensor(mainloop_params.shape_K);

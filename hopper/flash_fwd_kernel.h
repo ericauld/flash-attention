@@ -70,35 +70,37 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
     // Obtain warp index
     int const warp_group_thread_idx = threadIdx.x % cutlass::NumThreadsPerWarpGroup;
 
-    /* EA: The way PipelineParams breaks down is:
+    /* EA: 
+
+    The way PipelineParams breaks down is:
        - Ktraits has a trait called MainloopPipeline
-       - In flash/hopper/kernel_traits.h, we have 
-             MainloopPipeline := cutlass::PipelineTmaAsync<kStages>
-       - Above in this file, 
-             PipelineParams := MainloopPipeline::Params
-       - PipelineTmaAsync<int Stages_> lives in 
+       - In flash/hopper/kernel_traits.h, we have MainloopPipeline :=
+             cutlass::PipelineTmaAsync<kStages>
+       - Above in this file, PipelineParams := MainloopPipeline::Params
+       - PipelineTmaAsync<int Stages_> lives in
             cutlass/include/cutlass/pipeline/sm90_pipeline.hpp
        - It's about 300 lines long
        - Its Params struct is
 
-      struct Params {
-        uint32_t transaction_bytes = 0;
-        ThreadCategory role = ThreadCategory::NonParticipant;
-        uint32_t is_leader = 0;
-        uint32_t num_consumers = 0;
+      struct Params { uint32_t transaction_bytes = 0; ThreadCategory role =
+        ThreadCategory::NonParticipant; uint32_t is_leader = 0; uint32_t
+        num_consumers = 0;
       };
 
+      PipelineState is what's mostly dealt with as the loading loop proceeds. I
+      haven't yet found where it actually moves memory, though, or where it
+      leaves it.
+
       As for PipelineState, 
-      - Above in this file,
-             PipelineState := MainloopPipeline::PipelineState
-      - In flash/hopper/kernel_traits.h, we have 
-             MainloopPipeline := cutlass::PipelineTmaAsync<kStages>
-      - PipelineTmaAsync<int Stages_> lives in 
+      - Above in this file, PipelineState := MainloopPipeline::PipelineState
+      - In flash/hopper/kernel_traits.h, we have MainloopPipeline :=
+             cutlass::PipelineTmaAsync<kStages>
+      - PipelineTmaAsync<int Stages_> lives in
             cutlass/include/cutlass/pipeline/sm90_pipeline.hpp
       - It's about 300 lines long
-      - In PipelineTmaAsync<int Stages_>,
-             PipelineState := cutlass::PipelineState<Stages>
-      - That struct is free in the same file
+      - In PipelineTmaAsync<int Stages_>, PipelineState :=
+             cutlass::PipelineState<Stages>
+      - That struct is free, in the same file
       - It's 80 lines long...has state
         - Stages : int
         - index_ : int
@@ -107,12 +109,10 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
       - Main fcn is operator++
       - Here's the `advance` method
 
-     CUTLASS_DEVICE
-     PipelineState& advance(uint32_t num_iterations) {
-       if constexpr (Stages > 0) {
-         // Number of iterations cross over the stage boundary => flipped phase
-         if ((num_iterations < Stages) && (index_ + num_iterations) >= Stages ) {
-           phase_ ^= 1;
+     CUTLASS_DEVICE PipelineState& advance(uint32_t num_iterations) { if
+     constexpr (Stages > 0) { // Number of iterations cross over the stage
+     boundary => flipped phase if ((num_iterations < Stages) && (index_ +
+     num_iterations) >= Stages ) { phase_ ^= 1;
          }
          // How many times number of iterations cross over the stage boundary and
          // end up on a odd number => flipped phase
@@ -133,6 +133,11 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
     pipeline_params.role = warp_group_idx == 0
         ? MainloopPipeline::ThreadCategory::Producer
         : MainloopPipeline::ThreadCategory::Consumer;
+
+    /* EA: OK, I should pay attention to where the pipeline_params.role is used,
+       probably in `load` or `mma`. Recall the PipelineTmaAsync's Params struct
+       has members (transaction_bytes, role, is_leader, num_consumers) */
+
     pipeline_params.is_leader = warp_group_thread_idx == 0;
     pipeline_params.num_consumers = NumMmaThreads;
 
@@ -143,6 +148,12 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
     /* EA: shared_storage.barrier_Q and barrier_O */
 
     // We're counting on pipeline_k to call cutlass::arch::fence_barrier_init();
+
+    // EA: One interesting thing about the comment above is that the function
+    // they mention is called in the constructor of PipelineTmaAsyc. Maybe
+    // that's what they mean when they say pipeline_k (i.e. the constructor)
+    // calls barrier init.
+
     MainloopPipeline pipeline_k(shared_storage.pipeline_k, pipeline_params, ClusterShape{});
     MainloopPipeline pipeline_v(shared_storage.pipeline_v, pipeline_params, ClusterShape{});
 
@@ -172,15 +183,21 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
             // EA: Only warp 0 issues the load
             
             /* EA: make_producer_start_state is discussed in
-               media/docs/pipeline.md. Evidently what it does is acquire
-               the initial "stages" for the producers, assuming the pipe starts
+               media/docs/pipeline.md. Evidently what it does is acquire the
+               initial "stages" for the producers, assuming the pipe starts
                "empty" (meaning all producer acquires initially succeed)
-               
-               It has this signature:
 
-               template <class Pipeline>
-               PipelineState <Pipeline::Stages>
-               make_producer_start_state (void)
+               It lives in include/cutlass/pipeline/sm90_pipeline.hpp and it's really short:
+
+                 template<class Pipeline>
+                 CUTLASS_DEVICE
+                 PipelineState<Pipeline::Stages> make_producer_start_state() {
+                   // Producer starts with an opposite phase as the buffers are initially empty
+                   constexpr int InitialProducerStage = 0;
+                   constexpr uint32_t InitialProducerPhase = 1;
+                   constexpr uint32_t InitialProducerCount = 0;
+                   return {InitialProducerStage, InitialProducerPhase, InitialProducerCount};
+                 }
             */
             
             PipelineState smem_pipe_write_k = cutlass::make_producer_start_state<MainloopPipeline>();
@@ -188,30 +205,16 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
 
             int work_idx = 0;
 
-            // auto get_tile_count = [&] () {
-            //     cutlass::arch::NamedBarrier::sync(NumMmaThreads + 2 * cutlass::NumThreadsPerWarp, 10 /*id*/);
-            //     return shared_storage.tile_count_semaphore;
-            // };
-
-            // while (work_tile_info.is_valid()) {
-            // for (int tile_count = blockIdx.x; tile_count < params.total_blocks; tile_count = get_tile_count()) {
-            // for (int tile_count_semaphore = blockIdx.x; tile_count_semaphore < params.total_blocks; tile_count_semaphore = __shfl_sync(0xffffffff, tile_count_semaphore, 0)) {
-
-            /* EA: So I guess this little bit below issues all the loads...
-             */ 
             for (auto work_tile_info = scheduler.get_initial_work();
                  work_tile_info.is_valid(scheduler_params); 
                  work_tile_info = scheduler.get_next_work(scheduler_params, work_tile_info))
             {
                 int tile_count_semaphore = 0;
-                // EA: Why have this if you're just going to set it to zero each time?
-                // Also, you're redclaring it over and over?
+                // EA: Why have this var?
                                         /* c&        c&                c&                v           v        PipelineState &    PipelineState &        */
                 collective_mainloop.load(params, mainloop_params, scheduler_params, pipeline_k, pipeline_v, smem_pipe_write_k, smem_pipe_write_v,
                                          shared_storage, work_tile_info, work_idx, tile_count_semaphore);
                                         /*   &               v (!)           &             &                  */
-                // ++work_idx;
-                // work_tile_info = scheduler.fetch_next_work();
             }
             collective_mainloop.load_tail(pipeline_k, pipeline_v, smem_pipe_write_k, smem_pipe_write_v);
         }
@@ -226,7 +229,7 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
         TileScheduler scheduler{};
 
         PipelineState smem_pipe_read_k, smem_pipe_read_v;
-        // We don't need separate variables smem_pip_release_k and smem_pipe_release_v
+        // We don't need separate variables smem_pipe_release_k and smem_pipe_release_v
         // (like in Cutlass's gemm) because the read and release pipeline states are always the same.
 
         // EA: Hmmm...evidently this lambda is used only in commented out code
@@ -269,7 +272,7 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
                                     tOrO,             softmax,    n_block_max, 
                                  /* FrgTensorO &      Softmax &     int      */
                                     threadIdx.x - NumCopyThreads, work_idx, m_block, shared_storage);
-                                    /* int                           int      int         SharedStorage& */
+                                 /*             int                 int       int    SharedStorage& */
 
                                     // tOrO, softmax, n_block_max, threadIdx.x - NumCopyThreads + (work_idx >> 30), work_idx, shared_storage);
                                     // tOrO, softmax, n_block_max, threadIdx.x - NumCopyThreads, 0, shared_storage);
