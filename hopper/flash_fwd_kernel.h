@@ -66,6 +66,7 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
         CollectiveMainloop::prefetch_tma_descriptors(mainloop_params);
         CollectiveEpilogue::prefetch_tma_descriptors(epilogue_params);
     }
+    // EA: What is a prefetch and how does it help?
 
     // Obtain warp index
     int const warp_group_thread_idx = threadIdx.x % cutlass::NumThreadsPerWarpGroup;
