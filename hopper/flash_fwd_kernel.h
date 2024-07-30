@@ -56,7 +56,7 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
 
     extern __shared__ char shared_memory[];
     auto &shared_storage = *reinterpret_cast<typename Ktraits::SharedStorage*>(shared_memory);
-    // EA: Hmmmm...weird
+    // EA: Hmmmm...why make it a reference? So it doesn't keep it alive?
 
     int const lane_predicate = cute::elect_one_sync();
     int const warp_idx = cutlass::canonical_warp_idx_sync();
@@ -145,7 +145,7 @@ __global__ void __launch_bounds__(Ktraits::kNWarps * cutlass::NumThreadsPerWarp,
         shared_storage.barrier_Q.init(1 /*numThreads*/);
         shared_storage.barrier_O.init(size(ClusterShape{}) /*numThreads*/);
     }
-    /* EA: shared_storage.barrier_Q and barrier_O */
+    /* EA: Why barriers only for Q and O? */
 
     // We're counting on pipeline_k to call cutlass::arch::fence_barrier_init();
 
